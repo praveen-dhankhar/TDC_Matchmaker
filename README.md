@@ -7,7 +7,7 @@ AI-assisted matrimonial matchmaker console for The Date Crew.
 - Frontend: Next.js, TypeScript, Tailwind CSS
 - Backend: Express, TypeScript, JWT cookies, Zod validation
 - Data: in-memory MVP store seeded with 120 Indian matrimonial profiles
-- AI: OpenAI `gpt-4o-mini` with cached scoring and rule-based fallback
+- AI: Gemini `gemini-flash-latest` with cached scoring and rule-based fallback
 
 ## Demo Login
 
@@ -31,7 +31,8 @@ PORT=4000
 JWT_SECRET=replace-me
 JWT_EXPIRES_IN=8h
 ENCRYPTION_KEY=replace-with-strong-secret
-OPENAI_API_KEY=sk-...
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-flash-latest
 CORS_ORIGIN=http://localhost:3000
 ```
 
@@ -55,4 +56,4 @@ npm test
 
 - Notes, sent matches, profile pool, and AI cache are in memory and reset on server restart.
 - Email is mocked and logged to the backend console.
-- If `OPENAI_API_KEY` is missing or rejected, match scoring falls back to deterministic rule-based explanations.
+- If `GEMINI_API_KEY` is missing or rejected, match scoring falls back to deterministic rule-based explanations.
