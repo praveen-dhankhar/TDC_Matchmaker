@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "commonjs",
+    "module": "Node16",
     "lib": ["ES2022"],
     "outDir": "./dist",
     "rootDir": "../",
@@ -13,11 +13,7 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "moduleResolution": "node",
-    "paths": {
-      "@shared/*": ["../shared/*"]
-    },
-    "baseUrl": "."
+    "moduleResolution": "node16"
   },
   "include": ["src/**/*", "../shared/**/*"],
   "exclude": ["node_modules", "dist"]
