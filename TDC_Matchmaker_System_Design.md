@@ -9,7 +9,7 @@
 - Dashboard: customer list with Name, Age, City, Status tag
 - Detailed biodata view (30+ fields per spec)
 - Gender-specific matching algorithm + pool of 100+ dummy profiles
-- AI match scoring with explanation (OpenAI / LLM)
+- AI match scoring with explanation (Gemini / LLM)
 - Send Match action — modal/toast + mock email trigger
 - Quick notes per customer from meetings/calls
 
@@ -32,7 +32,7 @@
 | Match requests / day | ~50 |
 | AI API calls / day | ~50 |
 
-> MVP uses static JSON / mock DB. Growth path: Firebase Firestore → PostgreSQL + pgvector for embedding-based matching. AI cost at 50 calls/day with GPT-4o-mini ≈ $0.05/day. Bottleneck at scale: OpenAI latency per match scoring call — mitigate with async scoring + result caching.
+> MVP uses static JSON / mock DB. Growth path: Firebase Firestore → PostgreSQL + pgvector for embedding-based matching. AI cost at 50 calls/day with Gemini Flash remains small at MVP scale. Bottleneck at scale: Gemini latency per match scoring call — mitigate with async scoring + result caching.
 
 ---
 
@@ -59,7 +59,7 @@
                                ↓
 ┌──────────────────────────────────────────────────────────────┐
 │                     External Services                        │
-│        OpenAI API · Email (mock / SMTP)                      │
+│        Gemini API · Email (mock / SMTP)                      │
 │              Hosting: Vercel + Render                        │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -108,7 +108,7 @@
 Dummy pool loaded once into memory on server start. TTL refresh every 24h or on manual seed update. Eliminates repeated DB reads for the matching engine hot path.
 
 ### AI score cache
-Cache OpenAI response keyed on `(customer_id, candidate_id)` — same pair always gets same score. Cuts API cost and latency on re-render of the matches panel.
+Cache Gemini response keyed on `(customer_id, candidate_id)` — same pair always gets same score. Cuts API cost and latency on re-render of the matches panel.
 
 ### Session cache
 JWT stored in `httpOnly` cookie client-side. Server validates via secret — no DB hit on each request. Token expiry 8h; matchmaker re-authenticates per shift.
@@ -123,7 +123,7 @@ At MVP scale (50 match actions/day), a full message queue like Redis Pub/Sub or 
 **Fire-and-forget async:** `POST /send-match` returns 202 immediately; email and AI intro generation run in a background `Promise`. Toast/modal shown client-side optimistically. No blocking.
 
 ### Growth path
-**BullMQ + Redis:** Queue `send-match-email` and `generate-ai-intro` as separate jobs. Retry on OpenAI failure. Monitor via Bull Board UI. Enables rate limiting AI calls and batching email sends.
+**BullMQ + Redis:** Queue `send-match-email` and `generate-ai-intro` as separate jobs. Retry on Gemini failure. Monitor via Bull Board UI. Enables rate limiting AI calls and batching email sends.
 
 ---
 
@@ -135,7 +135,7 @@ At MVP scale (50 match actions/day), a full message queue like Redis Pub/Sub or 
 | Transport | HTTPS enforced via Vercel / Render. HSTS headers. No PII in URL query strings. |
 | Data access | Matchmaker can only read profiles assigned to them. Server enforces ownership on every `/customers/:id` route. |
 | PII protection | Email, phone encrypted at rest (AES-256). Decrypted only at response time for authenticated owner. |
-| API key safety | OpenAI API key stored as server env var only — never exposed to frontend bundle. |
+| API key safety | Gemini API key stored as server env var only — never exposed to frontend bundle. |
 | CORS | Origin whitelist: only the deployed Vercel frontend domain. Rejects all other origins. |
 | Input validation | Zod schema validation on all POST/PATCH bodies. Rejects malformed or oversized payloads. |
 
@@ -147,7 +147,7 @@ At MVP scale (50 match actions/day), a full message queue like Redis Pub/Sub or 
 Render health-check endpoint `GET /health`. Auto-restart on crash. Logs to stdout → Render Log Stream.
 
 ### AI usage
-Log each OpenAI call: latency, tokens used, cache hit/miss. Alert if daily spend exceeds threshold.
+Log each Gemini call: latency, tokens used, cache hit/miss. Alert if daily spend exceeds threshold.
 
 ### Product metrics
 Track matches sent per matchmaker, AI score distribution, note frequency — reveals product usage patterns.
@@ -192,8 +192,8 @@ Each decision maps directly to the spec:
 - **Scale estimation** — MVP is tiny: 100 profiles, ~10 matchmakers, ~50 AI calls/day. This anchors every other decision. Don't over-engineer for a demo.
 - **API design** — RESTful, nine endpoints covering every user flow the spec describes. The `/customers/:id/matches` endpoint is the core — it runs both the matching algo and the AI scoring in one call.
 - **Database** — Static JSON for MVP (zero infra, deploys in seconds), with a clear migration path to Firestore → PostgreSQL+pgvector as the product scales. The `matches` table is append-only by design — preserves full history.
-- **Caching** — three layers: profile pool in memory (eliminates DB reads on the hot path), AI score cache keyed on `(customer_id, candidate_id)` (cuts OpenAI cost on re-renders), JWT in httpOnly cookie (no DB hit per request).
-- **Message queue** — fire-and-forget async `Promise` at MVP scale. BullMQ + Redis when you need retry logic and rate limiting for OpenAI calls.
+- **Caching** — three layers: profile pool in memory (eliminates DB reads on the hot path), AI score cache keyed on `(customer_id, candidate_id)` (cuts Gemini cost on re-renders), JWT in httpOnly cookie (no DB hit per request).
+- **Message queue** — fire-and-forget async `Promise` at MVP scale. BullMQ + Redis when you need retry logic and rate limiting for Gemini calls.
 - **Security** — the spec handles real PII (phone, email, income, caste). That demands AES-256 at rest, httpOnly JWTs, CORS whitelist, and server-side ownership enforcement on every profile route.
 - **Monitoring** — three axes: uptime/crashes, AI spend/latency, and product usage metrics (matches sent, score distribution).
 - **Tradeoffs** — the trickiest call is the gender-asymmetric matching logic. The spec explicitly defines it, but hardcoding social assumptions into the engine is a liability at scale. The right move is to implement it as specified for the submission, then document it as configurable logic in the write-up.
