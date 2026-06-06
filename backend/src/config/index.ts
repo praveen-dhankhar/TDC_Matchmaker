@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import path from 'path';
 
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env'), override: true });
 
 export const config = {
   port: parseInt(process.env.PORT || '4000', 10),
@@ -13,8 +13,9 @@ export const config = {
     expiresIn: process.env.JWT_EXPIRES_IN || '8h',
   },
 
-  openai: {
-    apiKey: process.env.OPENAI_API_KEY || '',
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY || '',
+    model: process.env.GEMINI_MODEL || 'gemini-flash-latest',
   },
 
   cors: {
