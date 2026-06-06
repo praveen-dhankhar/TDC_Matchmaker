@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  background: #f4f8f5;
+  color: #282421;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(249, 214, 221, 0.62), transparent 32rem),
+    linear-gradient(135deg, #fffefd 0%, #f4f8f5 58%, #eef7f1 100%);
+  color: #282421;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid rgba(184, 74, 98, 0.3);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: #f9d6dd;
+}
+
+@layer components {
+  .app-container {
+    @apply mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8;
+  }
+
+  .panel {
+    @apply rounded-lg border border-black/10 bg-paper shadow-soft;
+  }
+
+  .field-label {
+    @apply text-xs font-semibold uppercase tracking-wide text-muted;
+  }
+
+  .input {
+    @apply w-full rounded-md border border-black/15 bg-white px-3 py-2 text-sm text-ink shadow-sm transition focus:border-blush;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded-md bg-blush px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#a53e54] disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center rounded-md border border-black/15 bg-white px-4 py-2 text-sm font-semibold text-ink shadow-sm transition hover:border-blush hover:text-blush disabled:cursor-not-allowed disabled:opacity-60;
+  }
+}
