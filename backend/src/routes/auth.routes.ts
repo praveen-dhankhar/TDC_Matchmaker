@@ -43,7 +43,7 @@ router.post('/login', loginLimiter, validateBody(loginSchema), async (req, res: 
     res.cookie('token', result.token, {
       httpOnly: true,
       secure: !config.isDev,
-      sameSite: config.isDev ? 'lax' : 'strict',
+      sameSite: config.isDev ? 'lax' : 'none',
       maxAge: 8 * 60 * 60 * 1000, // 8 hours
     });
 
