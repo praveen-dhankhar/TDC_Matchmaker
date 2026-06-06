@@ -78,7 +78,7 @@ export function MatchesPanel({ customerId }: MatchesPanelProps) {
             <Sparkles size={18} className="text-blush" />
             AI Match Recommendations
           </h2>
-          <p className="mt-1 text-sm text-muted">Top candidates ranked by rules plus GPT-4o-mini scoring.</p>
+          <p className="mt-1 text-sm text-muted">Top candidates ranked by rules plus Gemini scoring.</p>
         </div>
         <button type="button" className="btn-secondary gap-2" onClick={loadMatches} disabled={loading}>
           <RefreshCcw size={16} />
