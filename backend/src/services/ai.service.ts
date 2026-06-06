@@ -1,27 +1,49 @@
 /**
  * TDC Matchmaker — AI Scoring Service
  *
- * Uses OpenAI GPT-4o-mini to generate rich natural language match explanations
+ * Uses Gemini REST API to generate rich natural language match explanations
  * and AI-powered compatibility scores. Includes caching and rule-based fallback.
  */
 
-import OpenAI from 'openai';
 import { config } from '../config';
 import { dataStore } from '../data/store';
 import { computeAge } from '../utils/helpers';
 import type { Profile, MatchLabel } from '../../../shared/types';
 
-let openaiClient: OpenAI | null = null;
+type GeminiResponse = {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        text?: string;
+      }>;
+    };
+  }>;
+  error?: {
+    code: number;
+    message: string;
+    status: string;
+  };
+};
 
-function getOpenAIClient(): OpenAI | null {
-  if (!config.openai.apiKey) {
-    console.warn('[AI Service] No OpenAI API key configured — using rule-based fallback');
-    return null;
+type GeminiScorePayload = {
+  aiScore?: unknown;
+  label?: unknown;
+  explanation?: unknown;
+};
+
+function hasGeminiKey(): boolean {
+  if (!config.gemini.apiKey) {
+    console.warn('[AI Service] No Gemini API key configured — using rule-based fallback');
+    return false;
   }
-  if (!openaiClient) {
-    openaiClient = new OpenAI({ apiKey: config.openai.apiKey });
-  }
-  return openaiClient;
+  return true;
+}
+
+function geminiGenerateContentUrl(): string {
+  const modelPath = config.gemini.model.startsWith('models/')
+    ? config.gemini.model
+    : `models/${config.gemini.model}`;
+  return `https://generativelanguage.googleapis.com/v1beta/${modelPath}:generateContent`;
 }
 
 /**
@@ -50,7 +72,10 @@ function profileSummary(profile: Profile): string {
  * Generate the AI scoring prompt.
  */
 function buildPrompt(customerSummary: string, candidateSummary: string, ruleScore: number): string {
-  return `You are an expert Indian matrimonial matchmaker. Evaluate the compatibility between these two profiles.
+  return `Return a single minified JSON object only. Do not include markdown, code fences, headings, or prose outside the JSON.
+Schema: {"aiScore": number, "label": "High Potential"|"Good Match"|"Worth Exploring"|"Low Compatibility", "explanation": string}.
+
+You are an expert Indian matrimonial matchmaker. Evaluate the compatibility between these two profiles.
 
 CUSTOMER (seeking a match):
 ${customerSummary}
@@ -67,7 +92,7 @@ Provide your assessment as a JSON object with exactly these fields:
 
 Consider Indian matrimonial conventions: religion, caste, family values, career stability, location preferences, lifestyle alignment, and shared interests.
 
-Respond with ONLY the JSON object, no markdown formatting.`;
+The explanation must be 2-3 sentences and mention specific compatible or incompatible factors such as shared values, career alignment, lifestyle, location, or family background.`;
 }
 
 /**
@@ -144,8 +169,7 @@ export async function scoreWithAI(
     };
   }
 
-  const client = getOpenAIClient();
-  if (!client) {
+  if (!hasGeminiKey()) {
     // No API key — use fallback
     const result = {
       aiScore: ruleScore,
@@ -163,30 +187,47 @@ export async function scoreWithAI(
       ruleScore
     );
 
-    const response = await client.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.3,
-      max_tokens: 300,
+    const response = await fetch(geminiGenerateContentUrl(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-goog-api-key': config.gemini.apiKey,
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [{ text: prompt }],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.2,
+          response_mime_type: 'application/json',
+        },
+      }),
     });
 
-    const content = response.choices[0]?.message?.content?.trim();
+    const geminiResponse = (await response.json()) as GeminiResponse;
+    if (!response.ok || geminiResponse.error) {
+      throw new Error(geminiResponse.error?.message || `Gemini request failed with ${response.status}`);
+    }
+
+    const content = geminiResponse.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
     if (!content) throw new Error('Empty AI response');
 
-    // Parse the JSON response (handle potential markdown wrapping)
-    const jsonStr = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const parsed = JSON.parse(jsonStr);
+    const parsed = parseJsonResponse(content) as GeminiScorePayload;
 
     const result = {
       aiScore: clampScore(parsed.aiScore),
       label: validateLabel(parsed.label),
-      explanation: parsed.explanation || generateFallbackExplanation(customer, candidate, ruleScore),
+      explanation: typeof parsed.explanation === 'string'
+        ? parsed.explanation
+        : generateFallbackExplanation(customer, candidate, ruleScore),
     };
 
     // Cache the result
     dataStore.setCachedAiScore(customerId, candidateId, result);
 
-    console.log(`[AI Service] Scored ${customerId} ↔ ${candidateId}: ${result.aiScore} (${result.label})`);
+    console.log(`[AI Service] Gemini scored ${customerId} ↔ ${candidateId}: ${result.aiScore} (${result.label})`);
     return result;
   } catch (err) {
     console.error('[AI Service] Error:', err instanceof Error ? err.message : err);
@@ -213,6 +254,24 @@ function validateLabel(label: unknown): MatchLabel {
     return label as MatchLabel;
   }
   return 'Worth Exploring';
+}
+
+function parseJsonResponse(content: string): unknown {
+  const withoutFences = content
+    .replace(/```json/gi, '')
+    .replace(/```/g, '')
+    .trim();
+
+  try {
+    return JSON.parse(withoutFences);
+  } catch {
+    const firstBrace = withoutFences.indexOf('{');
+    const lastBrace = withoutFences.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      return JSON.parse(withoutFences.slice(firstBrace, lastBrace + 1));
+    }
+    throw new Error('Gemini response was not valid JSON');
+  }
 }
 
 export const aiService = { scoreWithAI };
