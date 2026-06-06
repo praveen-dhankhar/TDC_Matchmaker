@@ -70,14 +70,14 @@ Full biodata with **30+ fields** as specified:
 | **Shared filters** | Marital status compatibility, language overlap, no dealbreaker conflicts |
 | **Scoring** | Rule-based compatibility score (0–100) computed first, then top-N sent to AI for enrichment |
 
-### FR-6: AI Match Scoring (OpenAI GPT-4o-mini)
+### FR-6: AI Match Scoring (Gemini)
 | Requirement | Detail |
 |---|---|
-| Model | `gpt-4o-mini` |
+| Model | `gemini-flash-latest` |
 | Input | Customer profile + candidate profile (JSON summaries) |
 | Output | Score (0–100), label (`High Potential` / `Good Match` / `Worth Exploring` / `Low Compatibility`), explanation (2–3 sentences) |
 | Caching | Cache by `(customer_id, candidate_id)` — same pair always returns cached score |
-| Fallback | If OpenAI fails, return rule-based score with label "Score based on compatibility rules" |
+| Fallback | If Gemini fails, return rule-based score with label "Score based on compatibility rules" |
 | Latency target | < 3 seconds per scoring call |
 
 ### FR-7: Send Match Action
@@ -113,7 +113,7 @@ Full biodata with **30+ fields** as specified:
 | NFR | Target | Implementation |
 |---|---|---|
 | Dashboard load | < 1 second | Static JSON in memory, no DB calls |
-| Match scoring | < 3 seconds | OpenAI `gpt-4o-mini` + result caching |
+| Match scoring | < 3 seconds | Gemini `gemini-flash-latest` + result caching |
 | Security — Auth | JWT + bcrypt | `httpOnly` cookie, 8h expiry |
 | Security — PII | AES-256 at rest | Email, phone encrypted in static data |
 | Security — CORS | Whitelist | Only deployed frontend domain |
@@ -141,8 +141,8 @@ Full biodata with **30+ fields** as specified:
                       │
         ┌─────────────┼──────────────┐
         ▼             ▼              ▼
-   Static JSON    OpenAI API    In-Memory Cache
-   (profiles,     (gpt-4o-mini)  (scores, sessions)
+   Static JSON    Gemini API    In-Memory Cache
+   (profiles,     (Gemini)      (scores, sessions)
     users)
 ```
 
@@ -279,7 +279,7 @@ interface MatchResult {
   candidateId: string;
   candidate: Profile;
   ruleScore: number;          // 0–100 from algo
-  aiScore: number;            // 0–100 from OpenAI
+  aiScore: number;            // 0–100 from Gemini
   label: 'High Potential' | 'Good Match' | 'Worth Exploring' | 'Low Compatibility';
   explanation: string;        // AI-generated
   sentAt?: string;            // null if not sent
@@ -343,8 +343,8 @@ interface User {
 | Language overlap | 5 | ≥ 1 shared language |
 
 ### Step 3: AI Enrichment
-- Top 10 candidates by rule score → sent to OpenAI
-- GPT-4o-mini returns: AI score (0–100), label, natural language explanation
+- Top 10 candidates by rule score → sent to Gemini
+- Gemini returns: AI score (0–100), label, natural language explanation
 - Final ranking = `0.4 * ruleScore + 0.6 * aiScore`
 
 ---
@@ -375,7 +375,7 @@ interface User {
 | **Phase 5** | API Design — implement Express routes, Zod schemas, middleware chain | Phase 4 |
 | **Phase 6** | Backend Implementation — services (auth, profile, matching, AI, notes, email) | Phase 5 |
 | **Phase 7** | Frontend Implementation — all pages, components, API client, responsive UI | Phase 6 |
-| **Phase 8** | AI Integration — OpenAI service, prompt engineering, caching, fallback | Phase 7 |
+| **Phase 8** | AI Integration — Gemini service, prompt engineering, caching, fallback | Phase 7 |
 | **Phase 9** | Testing — unit tests, API tests, E2E smoke tests | Phase 8 |
 | **Phase 10** | Deployment — Vercel (frontend) + Render (backend), env vars, CORS, final QA | Phase 9 |
 
@@ -385,12 +385,12 @@ interface User {
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| OpenAI API rate limits / downtime | Match scoring unavailable | Rule-based fallback scoring + cached results |
+| Gemini API rate limits / downtime | Match scoring unavailable | Rule-based fallback scoring + cached results |
 | Static JSON data loss on restart | Notes and match history lost | Document as MVP limitation; migration path to DB |
 | PII exposure | Legal and ethical risk | AES-256 encryption, ownership middleware, no PII in logs |
 | Cold start latency on Render free tier | First request slow (~30s) | Health check ping, loading spinner on frontend |
 | Gender-specific logic bias | Ethical concern | Make configurable, document assumptions in write-up |
-| Token budget on GPT-4o-mini | Cost overrun | Cache aggressively, limit to top-10 candidates per request |
+| Token budget on Gemini | Cost overrun | Cache aggressively, limit to top-10 candidates per request |
 
 ---
 
@@ -420,7 +420,7 @@ Phases 2–10: Architecture design through deployment.
 
 ### Potential improvements
 - Could add user personas and journey mapping for a richer UX design
-- Could define OpenAI prompt templates in this phase for earlier review
+- Could define Gemini prompt templates in this phase for earlier review
 - Preference weights in matching algorithm could be configurable per matchmaker
 
 ### Technical debt introduced
