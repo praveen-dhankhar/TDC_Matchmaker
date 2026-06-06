@@ -69,7 +69,7 @@ router.post('/logout', authMiddleware, (_req, res: Response) => {
   res.clearCookie('token', {
     httpOnly: true,
     secure: !config.isDev,
-    sameSite: config.isDev ? 'lax' : 'strict',
+    sameSite: config.isDev ? 'lax' : 'none',
   });
   res.json({ message: 'Logged out successfully' });
 });
