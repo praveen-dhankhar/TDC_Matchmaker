@@ -1,14 +1,15 @@
 /**
- * TDC Matchmaker — AI Scoring Service
+ * TDC Matchmaker AI Scoring Service
  *
- * Uses Gemini REST API to generate rich natural language match explanations
- * and AI-powered compatibility scores. Includes caching and rule-based fallback.
+ * Uses Gemini REST API to enrich deterministic match results with
+ * matchmaker-readable explanations. AI is an enhancement layer only; the rule
+ * engine remains the source of deterministic compatibility signals.
  */
 
 import { config } from '../config';
 import { dataStore } from '../data/store';
-import { computeAge } from '../utils/helpers';
-import type { Profile, MatchLabel } from '../../../shared/types';
+import { arrayOverlap, computeAge } from '../utils/helpers';
+import type { AiMatchInsight, MatchLabel, Profile } from '../../../shared/types';
 
 type GeminiResponse = {
   candidates?: Array<{
@@ -29,11 +30,50 @@ type GeminiScorePayload = {
   aiScore?: unknown;
   label?: unknown;
   explanation?: unknown;
+  strengths?: unknown;
+  concerns?: unknown;
+  reasoning?: unknown;
+  suggestedNextStep?: unknown;
 };
+
+export type AiSafeProfile = Partial<{
+  firstName: string;
+  age: number;
+  gender: Profile['gender'];
+  city: string;
+  country: string;
+  height: number;
+  education: string;
+  degree: string;
+  profession: string;
+  designation: string;
+  maritalStatus: Profile['maritalStatus'];
+  languagesKnown: string[];
+  religion: string;
+  caste: string;
+  wantKids: Profile['wantKids'];
+  openToRelocate: Profile['openToRelocate'];
+  openToPets: Profile['openToPets'];
+  diet: Profile['diet'];
+  smoking: Profile['smoking'];
+  drinking: Profile['drinking'];
+  hobbies: string[];
+  preferredCities: string[];
+  preferredReligion: string[];
+  dealbreakers: string[];
+  bio: string;
+}>;
+
+const VALID_LABELS: MatchLabel[] = [
+  'High Potential',
+  'Good Match',
+  'Worth Exploring',
+  'Low Compatibility',
+];
 
 function hasGeminiKey(): boolean {
   if (!config.gemini.apiKey) {
-    console.warn('[AI Service] No Gemini API key configured — using rule-based fallback');
+    console.warn('[AI Service] No Gemini API key configured. Using rule-based fallback.');
     return false;
   }
   return true;
@@ -46,217 +86,251 @@ function geminiGenerateContentUrl(): string {
   return `https://generativelanguage.googleapis.com/v1beta/${modelPath}:generateContent`;
 }
 
-/**
- * Build a concise profile summary for the AI prompt (no PII).
- */
-function profileSummary(profile: Profile): string {
-  const age = computeAge(profile.dateOfBirth);
-  return [
-    `${profile.firstName}, ${age}y, ${profile.gender}`,
-    `City: ${profile.city} | Open to relocate: ${profile.openToRelocate}`,
-    `Religion: ${profile.religion}, Caste: ${profile.caste}`,
-    `Education: ${profile.degree}${profile.postgraduateDegree ? `, ${profile.postgraduateDegree}` : ''}`,
-    `Profession: ${profile.profession} at ${profile.currentCompany} (${profile.designation})`,
-    `Income: ${profile.income}`,
-    `Marital Status: ${profile.maritalStatus} | Family: ${profile.familyType}`,
-    `Height: ${profile.height}cm | Body Type: ${profile.bodyType}`,
-    `Diet: ${profile.diet} | Drinking: ${profile.drinking} | Smoking: ${profile.smoking}`,
-    `Want Kids: ${profile.wantKids} | Open to Pets: ${profile.openToPets}`,
-    `Languages: ${profile.languagesKnown.join(', ')}`,
-    `Hobbies: ${profile.hobbies.join(', ')}`,
-    `Bio: ${profile.bio}`,
-  ].join('\n');
+export async function generateGeminiJson(prompt: string, temperature = 0.2): Promise<string> {
+  const response = await fetch(geminiGenerateContentUrl(), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-goog-api-key': config.gemini.apiKey,
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          parts: [{ text: prompt }],
+        },
+      ],
+      generationConfig: {
+        temperature,
+        response_mime_type: 'application/json',
+      },
+    }),
+  });
+
+  const geminiResponse = (await response.json()) as GeminiResponse;
+  if (!response.ok || geminiResponse.error) {
+    throw new Error(geminiResponse.error?.message || `Gemini request failed with ${response.status}`);
+  }
+
+  const content = geminiResponse.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+  if (!content) throw new Error('Empty AI response');
+  return content;
+}
+
+export function redactContactPii(value: string): string {
+  return value
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[removed]')
+    .replace(/(?:\+?\d[\d\s().-]{7,}\d)/g, '[removed]');
+}
+
+function cleanText(value: string): string {
+  return redactContactPii(value).replace(/\s+/g, ' ').trim();
+}
+
+function cleanTextArray(values: string[]): string[] {
+  return values.map(cleanText).filter((value) => value.length > 0);
 }
 
 /**
- * Generate the AI scoring prompt.
+ * Convert a full Profile into the only fields Gemini is allowed to see.
  */
-function buildPrompt(customerSummary: string, candidateSummary: string, ruleScore: number): string {
-  return `Return a single minified JSON object only. Do not include markdown, code fences, headings, or prose outside the JSON.
-Schema: {"aiScore": number, "label": "High Potential"|"Good Match"|"Worth Exploring"|"Low Compatibility", "explanation": string}.
-
-You are an expert Indian matrimonial matchmaker. Evaluate the compatibility between these two profiles.
-
-CUSTOMER (seeking a match):
-${customerSummary}
-
-CANDIDATE (potential match):
-${candidateSummary}
-
-Rule-based compatibility score: ${ruleScore}/100
-
-Provide your assessment as a JSON object with exactly these fields:
-- "aiScore": number (0-100), your AI-based compatibility score
-- "label": one of "High Potential", "Good Match", "Worth Exploring", "Low Compatibility"
-- "explanation": string (2-3 sentences explaining why they match or don't, mentioning specific compatible/incompatible factors like shared values, career alignment, lifestyle, location, family background)
-
-Consider Indian matrimonial conventions: religion, caste, family values, career stability, location preferences, lifestyle alignment, and shared interests.
-
-The explanation must be 2-3 sentences and mention specific compatible or incompatible factors such as shared values, career alignment, lifestyle, location, or family background.`;
+export function sanitizeProfileForAI(profile: Profile): AiSafeProfile {
+  return {
+    firstName: cleanText(profile.firstName),
+    age: computeAge(profile.dateOfBirth),
+    gender: profile.gender,
+    city: cleanText(profile.city),
+    country: cleanText(profile.country),
+    height: profile.height,
+    education: cleanText(profile.degree),
+    degree: cleanText(profile.degree),
+    profession: cleanText(profile.profession),
+    designation: cleanText(profile.designation),
+    maritalStatus: profile.maritalStatus,
+    languagesKnown: cleanTextArray(profile.languagesKnown),
+    religion: cleanText(profile.religion),
+    caste: cleanText(profile.caste),
+    wantKids: profile.wantKids,
+    openToRelocate: profile.openToRelocate,
+    openToPets: profile.openToPets,
+    diet: profile.diet,
+    smoking: profile.smoking,
+    drinking: profile.drinking,
+    hobbies: cleanTextArray(profile.hobbies),
+    preferredCities: cleanTextArray(profile.preferredCities),
+    preferredReligion: cleanTextArray(profile.preferredReligion),
+    dealbreakers: cleanTextArray(profile.dealbreakers),
+    bio: cleanText(profile.bio),
+  };
 }
 
-/**
- * Determine label from a numeric score.
- */
-function scoreToLabel(score: number): MatchLabel {
+export function buildMatchScoringPrompt(
+  customerProfile: AiSafeProfile,
+  candidateProfile: AiSafeProfile,
+  ruleScore: number
+): string {
+  return `Return valid JSON only. Do not include markdown, code fences, headings, comments, or prose outside JSON.
+Use exactly this schema:
+{"aiScore":number,"label":"High Potential"|"Good Match"|"Worth Exploring"|"Low Compatibility","explanation":string,"strengths":string[],"concerns":string[],"reasoning":string,"suggestedNextStep":string}
+
+You are supporting a professional matchmaker. Evaluate profile fit using only the supplied JSON profile data and the deterministic rule score.
+
+Safety and privacy rules:
+- Use only provided profile data.
+- Ignore missing fields.
+- Do not infer or invent missing details.
+- Do not include email, phone, income, internal notes, session data, JWT data, or private biodata.
+- Avoid casteist, sexist, offensive, or deterministic assumptions.
+- Treat religion and caste only as stated preference data, without value judgments.
+- Do not make deterministic claims about compatibility.
+- Phrase recommendations as matchmaker-supportive suggestions.
+
+Output rules:
+- aiScore must be an integer from 0 to 100.
+- explanation must be short and matchmaker-readable.
+- strengths should contain 2 to 4 concise supplied-data highlights.
+- concerns should contain 0 to 3 concise supplied-data gaps or risks.
+- reasoning should explain natural language profile fit using only supplied data.
+- suggestedNextStep should be one concise next action for the matchmaker.
+
+DETERMINISTIC_RULE_SCORE: ${ruleScore}/100
+
+CUSTOMER_PROFILE_JSON:
+${JSON.stringify(customerProfile, null, 2)}
+
+CANDIDATE_PROFILE_JSON:
+${JSON.stringify(candidateProfile, null, 2)}`;
+}
+
+export function scoreToLabel(score: number): MatchLabel {
   if (score >= 80) return 'High Potential';
   if (score >= 60) return 'Good Match';
   if (score >= 40) return 'Worth Exploring';
   return 'Low Compatibility';
 }
 
-/**
- * Generate a rule-based explanation as fallback when AI is unavailable.
- */
-function generateFallbackExplanation(
+function unique(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+export function generateFallbackMatchInsight(
   customer: Profile,
   candidate: Profile,
   ruleScore: number
-): string {
-  const factors: string[] = [];
-  const customerAge = computeAge(customer.dateOfBirth);
-  const candidateAge = computeAge(candidate.dateOfBirth);
+): AiMatchInsight {
+  const strengths: string[] = [];
+  const concerns: string[] = [];
+  const sharedLanguages = arrayOverlap(customer.languagesKnown, candidate.languagesKnown);
+  const sharedHobbies = customer.hobbies.filter((hobby) =>
+    candidate.hobbies.some((candidateHobby) => candidateHobby.toLowerCase() === hobby.toLowerCase())
+  );
+
+  if (customer.city === candidate.city) {
+    strengths.push(`Both profiles are based in ${customer.city}.`);
+  } else if (customer.preferredCities.includes(candidate.city)) {
+    strengths.push(`${candidate.city} is in the customer's preferred city list.`);
+  } else if (candidate.openToRelocate !== 'No') {
+    strengths.push(`${candidate.firstName} is open to relocation.`);
+  } else {
+    concerns.push(`Location may need review because ${candidate.firstName} is based in ${candidate.city}.`);
+  }
 
   if (customer.religion === candidate.religion) {
-    factors.push(`shared ${customer.religion} background`);
+    strengths.push('Their stated religion preferences align.');
   }
-  if (customer.city === candidate.city) {
-    factors.push(`both based in ${customer.city}`);
-  }
+
   if (customer.wantKids === candidate.wantKids) {
-    factors.push('aligned views on having children');
+    strengths.push('Their stated views on children align.');
+  } else if (customer.wantKids !== 'Maybe' && candidate.wantKids !== 'Maybe') {
+    concerns.push('Their stated views on children differ.');
   }
+
   if (customer.diet === candidate.diet) {
-    factors.push(`similar dietary preferences (${customer.diet})`);
+    strengths.push(`They share a ${customer.diet.toLowerCase()} diet preference.`);
   }
-  const sharedHobbies = customer.hobbies.filter((h) =>
-    candidate.hobbies.map((ch) => ch.toLowerCase()).includes(h.toLowerCase())
-  );
+
+  if (sharedLanguages > 0) {
+    strengths.push('They have overlapping known languages.');
+  }
+
   if (sharedHobbies.length > 0) {
-    factors.push(`shared interests in ${sharedHobbies.slice(0, 2).join(' and ')}`);
+    strengths.push(`They share interest in ${sharedHobbies.slice(0, 2).join(' and ')}.`);
   }
 
+  if (customer.smoking !== candidate.smoking || customer.drinking !== candidate.drinking) {
+    concerns.push('Lifestyle preferences around smoking or drinking may need review.');
+  }
+
+  const safeStrengths = unique(strengths).slice(0, 4);
+  const safeConcerns = unique(concerns).slice(0, 3);
   const label = scoreToLabel(ruleScore);
-  if (factors.length === 0) {
-    return `${label} match based on overall compatibility analysis. Age difference of ${Math.abs(customerAge - candidateAge)} years. Score based on compatibility rules.`;
-  }
+  const ageGap = Math.abs(computeAge(customer.dateOfBirth) - computeAge(candidate.dateOfBirth));
 
-  return `${label} — ${factors.slice(0, 3).join(', ')}. Compatibility score reflects alignment across key matrimonial factors.`;
+  const explanation = safeStrengths.length > 0
+    ? `${label} based on deterministic rules. Key alignments include ${safeStrengths
+        .slice(0, 2)
+        .map((item) => item.replace(/\.$/, '').toLowerCase())
+        .join(' and ')}.`
+    : `${label} based on deterministic rules. The rule score reflects available profile preferences and an age gap of ${ageGap} years.`;
+
+  return {
+    aiScore: ruleScore,
+    label,
+    explanation,
+    strengths: safeStrengths,
+    concerns: safeConcerns,
+    reasoning: `AI scoring was unavailable, so this assessment uses the rule engine. The deterministic score considered supplied profile factors such as age range, city preferences, lifestyle choices, stated values, and preference alignment.`,
+    suggestedNextStep: ruleScore >= 60
+      ? 'Confirm mutual interest and review any preference gaps before making an introduction.'
+      : 'Review the listed concerns before deciding whether to proceed with an introduction.',
+    aiUnavailable: true,
+  };
 }
 
-/**
- * Score a single customer–candidate pair using AI.
- * Returns cached result if available. Falls back to rule-based scoring on error.
- */
-export async function scoreWithAI(
-  customerId: string,
-  candidateId: string,
-  ruleScore: number
-): Promise<{ aiScore: number; label: MatchLabel; explanation: string }> {
-  // Check cache first
-  const cached = dataStore.getCachedAiScore(customerId, candidateId);
-  if (cached) {
-    return cached as { aiScore: number; label: MatchLabel; explanation: string };
-  }
-
-  const customer = dataStore.getCustomerById(customerId);
-  const candidate = dataStore.getCustomerById(candidateId);
-  if (!customer || !candidate) {
-    return {
-      aiScore: ruleScore,
-      label: scoreToLabel(ruleScore),
-      explanation: 'Unable to generate AI explanation — profile not found.',
-    };
-  }
-
-  if (!hasGeminiKey()) {
-    // No API key — use fallback
-    const result = {
-      aiScore: ruleScore,
-      label: scoreToLabel(ruleScore),
-      explanation: generateFallbackExplanation(customer, candidate, ruleScore),
-    };
-    dataStore.setCachedAiScore(customerId, candidateId, result);
-    return result;
-  }
-
-  try {
-    const prompt = buildPrompt(
-      profileSummary(customer),
-      profileSummary(candidate),
-      ruleScore
-    );
-
-    const response = await fetch(geminiGenerateContentUrl(), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-goog-api-key': config.gemini.apiKey,
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [{ text: prompt }],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.2,
-          response_mime_type: 'application/json',
-        },
-      }),
-    });
-
-    const geminiResponse = (await response.json()) as GeminiResponse;
-    if (!response.ok || geminiResponse.error) {
-      throw new Error(geminiResponse.error?.message || `Gemini request failed with ${response.status}`);
-    }
-
-    const content = geminiResponse.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (!content) throw new Error('Empty AI response');
-
-    const parsed = parseJsonResponse(content) as GeminiScorePayload;
-
-    const result = {
-      aiScore: clampScore(parsed.aiScore),
-      label: validateLabel(parsed.label),
-      explanation: typeof parsed.explanation === 'string'
-        ? parsed.explanation
-        : generateFallbackExplanation(customer, candidate, ruleScore),
-    };
-
-    // Cache the result
-    dataStore.setCachedAiScore(customerId, candidateId, result);
-
-    console.log(`[AI Service] Gemini scored ${customerId} ↔ ${candidateId}: ${result.aiScore} (${result.label})`);
-    return result;
-  } catch (err) {
-    console.error('[AI Service] Error:', err instanceof Error ? err.message : err);
-    // Fallback to rule-based
-    const result = {
-      aiScore: ruleScore,
-      label: scoreToLabel(ruleScore),
-      explanation: generateFallbackExplanation(customer, candidate, ruleScore),
-    };
-    dataStore.setCachedAiScore(customerId, candidateId, result);
-    return result;
-  }
+export function unavailableProfileFallback(ruleScore: number): AiMatchInsight {
+  return {
+    aiScore: ruleScore,
+    label: scoreToLabel(ruleScore),
+    explanation: 'Unable to generate AI explanation because one or both profiles could not be found.',
+    strengths: [],
+    concerns: ['One or both profiles could not be found.'],
+    reasoning: 'The AI assessment could not run without both supplied profiles.',
+    suggestedNextStep: 'Verify both profile IDs before retrying.',
+    aiUnavailable: true,
+  };
 }
 
-function clampScore(score: unknown): number {
+export function clampScore(score: unknown): number {
   const num = Number(score);
-  if (isNaN(num)) return 50;
+  if (!Number.isFinite(num)) return 50;
   return Math.max(0, Math.min(100, Math.round(num)));
 }
 
-function validateLabel(label: unknown): MatchLabel {
-  const valid: MatchLabel[] = ['High Potential', 'Good Match', 'Worth Exploring', 'Low Compatibility'];
-  if (typeof label === 'string' && valid.includes(label as MatchLabel)) {
+function validateLabel(label: unknown, score: number): MatchLabel {
+  if (typeof label === 'string' && VALID_LABELS.includes(label as MatchLabel)) {
     return label as MatchLabel;
   }
-  return 'Worth Exploring';
+  return scoreToLabel(score);
 }
 
-function parseJsonResponse(content: string): unknown {
+function normalizeResponseText(value: unknown, fallback: string, maxLength: number): string {
+  if (typeof value !== 'string') return fallback;
+  const cleaned = cleanText(value);
+  if (!cleaned) return fallback;
+  return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength - 1).trim()}.` : cleaned;
+}
+
+function normalizeResponseList(value: unknown, fallback: string[], maxItems: number): string[] {
+  if (!Array.isArray(value)) return fallback;
+
+  const cleaned = value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => normalizeResponseText(item, '', 180))
+    .filter((item) => item.length > 0);
+
+  return cleaned.length > 0 ? unique(cleaned).slice(0, maxItems) : fallback;
+}
+
+export function parseJsonResponse(content: string): unknown {
   const withoutFences = content
     .replace(/```json/gi, '')
     .replace(/```/g, '')
@@ -274,4 +348,72 @@ function parseJsonResponse(content: string): unknown {
   }
 }
 
-export const aiService = { scoreWithAI };
+export function parseAiMatchResponse(content: string, fallback: AiMatchInsight): AiMatchInsight {
+  try {
+    const parsed = parseJsonResponse(content) as GeminiScorePayload;
+    const aiScore = clampScore(parsed.aiScore ?? fallback.aiScore);
+
+    return {
+      aiScore,
+      label: validateLabel(parsed.label, aiScore),
+      explanation: normalizeResponseText(parsed.explanation, fallback.explanation, 420),
+      strengths: normalizeResponseList(parsed.strengths, fallback.strengths, 4),
+      concerns: normalizeResponseList(parsed.concerns, fallback.concerns, 3),
+      reasoning: normalizeResponseText(parsed.reasoning, fallback.reasoning, 800),
+      suggestedNextStep: normalizeResponseText(parsed.suggestedNextStep, fallback.suggestedNextStep, 220),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Score a single customer-candidate pair using AI when available.
+ * Returns cached result if present. Falls back to deterministic scoring on error.
+ */
+export async function scoreWithAI(
+  customerId: string,
+  candidateId: string,
+  ruleScore: number
+): Promise<AiMatchInsight> {
+  const cached = dataStore.getCachedAiScore(customerId, candidateId);
+  if (cached) {
+    return cached;
+  }
+
+  const customer = dataStore.getCustomerById(customerId);
+  const candidate = dataStore.getCustomerById(candidateId);
+  if (!customer || !candidate) {
+    return unavailableProfileFallback(ruleScore);
+  }
+
+  const fallback = generateFallbackMatchInsight(customer, candidate, ruleScore);
+
+  if (!hasGeminiKey()) {
+    dataStore.setCachedAiScore(customerId, candidateId, fallback);
+    return fallback;
+  }
+
+  try {
+    const prompt = buildMatchScoringPrompt(
+      sanitizeProfileForAI(customer),
+      sanitizeProfileForAI(candidate),
+      ruleScore
+    );
+
+    const content = await generateGeminiJson(prompt, 0.2);
+    const result = parseAiMatchResponse(content, fallback);
+
+    dataStore.setCachedAiScore(customerId, candidateId, result);
+    console.log(`[AI Service] Gemini scored ${customerId}:${candidateId}: ${result.aiScore} (${result.label})`);
+    return result;
+  } catch (err) {
+    console.error('[AI Service] Error:', err instanceof Error ? err.message : err);
+    dataStore.setCachedAiScore(customerId, candidateId, fallback);
+    return fallback;
+  }
+}
+
+export const aiService = {
+  scoreWithAI,
+};
