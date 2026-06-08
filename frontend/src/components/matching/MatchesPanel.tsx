@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { RefreshCcw, Send, Sparkles } from 'lucide-react';
+import { Copy, Mail, RefreshCcw, Send, Sparkles } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { Toast } from '@/components/ui/Toast';
 import { api } from '@/lib/api';
 import { computeAge, fullName } from '@/lib/utils';
-import type { MatchResult } from '@/lib/types';
+import type { EmailIntroResponse, MatchResult } from '@/lib/types';
 
 type MatchesPanelProps = {
   customerId: string;
@@ -16,8 +16,12 @@ type MatchesPanelProps = {
 export function MatchesPanel({ customerId }: MatchesPanelProps) {
   const [matches, setMatches] = useState<MatchResult[]>([]);
   const [selectedMatch, setSelectedMatch] = useState<MatchResult | null>(null);
+  const [introMatch, setIntroMatch] = useState<MatchResult | null>(null);
+  const [emailIntro, setEmailIntro] = useState<EmailIntroResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [introLoading, setIntroLoading] = useState(false);
+  const [introError, setIntroError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [toastTone, setToastTone] = useState<'success' | 'error'>('success');
@@ -67,6 +71,41 @@ export function MatchesPanel({ customerId }: MatchesPanelProps) {
       setToast(err instanceof Error ? err.message : 'Failed to send match');
     } finally {
       setSending(false);
+    }
+  }
+
+  async function generateEmailIntro(match: MatchResult) {
+    setIntroMatch(match);
+    setEmailIntro(null);
+    setIntroError(null);
+    setIntroLoading(true);
+
+    try {
+      const intro = await api.emailIntro(customerId, match.candidateId);
+      setEmailIntro(intro);
+    } catch (err) {
+      setIntroError(err instanceof Error ? err.message : 'Failed to generate email intro');
+    } finally {
+      setIntroLoading(false);
+    }
+  }
+
+  function closeEmailIntro() {
+    setIntroMatch(null);
+    setEmailIntro(null);
+    setIntroError(null);
+  }
+
+  async function copyEmailIntro() {
+    if (!emailIntro) return;
+
+    try {
+      await navigator.clipboard.writeText(`Subject: ${emailIntro.subject}\n\n${emailIntro.intro}`);
+      setToastTone('success');
+      setToast('Email intro copied.');
+    } catch {
+      setToastTone('error');
+      setToast('Copy failed.');
     }
   }
 
@@ -124,6 +163,33 @@ export function MatchesPanel({ customerId }: MatchesPanelProps) {
             </div>
 
             <p className="mt-4 text-sm leading-6 text-ink">{match.explanation}</p>
+            {match.aiUnavailable ? (
+              <p className="mt-2 text-xs font-semibold text-muted">AI unavailable. Showing rule-based fallback.</p>
+            ) : null}
+
+            <div className="mt-4 grid gap-4 border-t border-black/10 pt-4 md:grid-cols-2">
+              <InsightList
+                title="Strengths"
+                items={match.strengths}
+                emptyText="No specific strengths returned."
+              />
+              <InsightList
+                title="Concerns"
+                items={match.concerns}
+                emptyText="No major concerns from supplied data."
+              />
+            </div>
+
+            <div className="mt-4 space-y-3 border-t border-black/10 pt-4 text-sm">
+              <div>
+                <p className="field-label">Reasoning</p>
+                <p className="mt-1 leading-6 text-ink">{match.reasoning}</p>
+              </div>
+              <div>
+                <p className="field-label">Suggested next step</p>
+                <p className="mt-1 leading-6 text-ink">{match.suggestedNextStep}</p>
+              </div>
+            </div>
 
             <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
               <div>
@@ -148,18 +214,92 @@ export function MatchesPanel({ customerId }: MatchesPanelProps) {
               </div>
             </dl>
 
-            <button
-              type="button"
-              className="btn-primary mt-4 w-full gap-2"
-              disabled={Boolean(match.sentAt)}
-              onClick={() => setSelectedMatch(match)}
-            >
-              <Send size={16} />
-              {match.sentAt ? 'Match Sent' : 'Send Match'}
-            </button>
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                className="btn-secondary flex-1 gap-2"
+                disabled={introLoading && introMatch?.candidateId === match.candidateId}
+                onClick={() => generateEmailIntro(match)}
+              >
+                <Mail size={16} />
+                {introLoading && introMatch?.candidateId === match.candidateId
+                  ? 'Generating...'
+                  : 'Generate Email Intro'}
+              </button>
+              <button
+                type="button"
+                className="btn-primary flex-1 gap-2"
+                disabled={Boolean(match.sentAt)}
+                onClick={() => setSelectedMatch(match)}
+              >
+                <Send size={16} />
+                {match.sentAt ? 'Match Sent' : 'Send Match'}
+              </button>
+            </div>
           </article>
         ))}
       </div>
+
+      <Modal
+        title="Email Intro"
+        open={Boolean(introMatch)}
+        onClose={() => {
+          if (!introLoading) closeEmailIntro();
+        }}
+      >
+        {introMatch ? (
+          <div>
+            <div className="flex items-start gap-4">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={introMatch.candidate.profilePhotoUrl}
+                alt=""
+                className="h-16 w-16 rounded-lg border border-black/10 bg-white"
+              />
+              <div>
+                <h3 className="text-lg font-semibold text-ink">{fullName(introMatch.candidate)}</h3>
+                <p className="mt-1 text-sm text-muted">
+                  {computeAge(introMatch.candidate.dateOfBirth)} years · {introMatch.candidate.city} ·{' '}
+                  {introMatch.candidate.profession}
+                </p>
+                <div className="mt-3">
+                  <StatusBadge value={introMatch.label} kind="label" />
+                </div>
+              </div>
+            </div>
+
+            {introLoading ? <p className="mt-5 text-sm text-muted">Generating intro...</p> : null}
+            {introError ? <p className="mt-5 text-sm text-blush">{introError}</p> : null}
+
+            {emailIntro ? (
+              <div className="mt-5 space-y-4">
+                <div>
+                  <p className="field-label">Subject</p>
+                  <p className="mt-1 rounded-md border border-black/10 bg-shell px-3 py-2 text-sm font-semibold text-ink">
+                    {emailIntro.subject}
+                  </p>
+                </div>
+                <div>
+                  <p className="field-label">Intro</p>
+                  <p className="mt-1 rounded-md border border-black/10 bg-shell px-3 py-3 text-sm leading-6 text-ink">
+                    {emailIntro.intro}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-xs font-semibold text-muted">
+                    {emailIntro.cached ? 'Cached intro' : 'Fresh intro'}
+                    {emailIntro.aiUnavailable ? ' · AI fallback' : ''}
+                  </p>
+                  <button type="button" className="btn-secondary gap-2" onClick={copyEmailIntro}>
+                    <Copy size={16} />
+                    Copy
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </Modal>
 
       <Modal
         title="Confirm Send Match"
@@ -217,6 +357,26 @@ function Score({ label, value, strong = false }: { label: string; value: number;
       <p className={strong ? 'mt-1 text-lg font-semibold text-blush' : 'mt-1 text-lg font-semibold text-ink'}>
         {value}
       </p>
+    </div>
+  );
+}
+
+function InsightList({ title, items, emptyText }: { title: string; items: string[]; emptyText: string }) {
+  return (
+    <div>
+      <p className="field-label">{title}</p>
+      {items.length > 0 ? (
+        <ul className="mt-2 space-y-1 text-sm leading-6 text-ink">
+          {items.map((item) => (
+            <li key={item} className="flex gap-2">
+              <span aria-hidden="true" className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-sage" />
+              <span>{item}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-sm leading-6 text-muted">{emptyText}</p>
+      )}
     </div>
   );
 }
