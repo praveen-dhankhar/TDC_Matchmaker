@@ -8,16 +8,23 @@
  * the same interface.
  */
 
-import type { Profile, User, Note, MatchResult } from '../../../shared/types';
+import type { AiMatchInsight, EmailIntro, Profile, User, Note, MatchResult } from '../../../shared/types';
 import { generateAllProfiles } from './seed';
 import { generateUsers } from './users';
+
+const AI_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+type CacheEntry<T> = {
+  value: T;
+  expiresAt: number;
+};
 
 class DataStore {
   private profiles: Map<string, Profile> = new Map();
   private users: Map<string, User> = new Map();
   private notes: Note[] = [];
   private sentMatches: Map<string, MatchResult[]> = new Map();
-  private aiScoreCache: Map<string, { aiScore: number; label: string; explanation: string }> = new Map();
+  private aiCache: Map<string, CacheEntry<unknown>> = new Map();
   private initialized = false;
 
   async initialize(): Promise<void> {
@@ -132,18 +139,49 @@ class DataStore {
     return sent.some((m) => m.candidateId === candidateId);
   }
 
-  // ---- AI Score Cache ----
+  // ---- AI Cache ----
+
+  getCachedValue<T>(key: string): T | undefined {
+    const cached = this.aiCache.get(key);
+    if (!cached) return undefined;
+
+    if (cached.expiresAt <= Date.now()) {
+      this.aiCache.delete(key);
+      return undefined;
+    }
+
+    return cached.value as T;
+  }
+
+  setCachedValue<T>(key: string, value: T, ttlMs: number = AI_CACHE_TTL_MS): void {
+    this.aiCache.set(key, {
+      value,
+      expiresAt: Date.now() + ttlMs,
+    });
+  }
 
   getCachedAiScore(customerId: string, candidateId: string) {
-    return this.aiScoreCache.get(`${customerId}:${candidateId}`);
+    return this.getCachedValue<AiMatchInsight>(`match_score:${customerId}:${candidateId}`);
   }
 
   setCachedAiScore(
     customerId: string,
     candidateId: string,
-    data: { aiScore: number; label: string; explanation: string }
+    data: AiMatchInsight
   ): void {
-    this.aiScoreCache.set(`${customerId}:${candidateId}`, data);
+    this.setCachedValue(`match_score:${customerId}:${candidateId}`, data);
+  }
+
+  getCachedEmailIntro(customerId: string, candidateId: string): EmailIntro | undefined {
+    return this.getCachedValue<EmailIntro>(`email_intro:${customerId}:${candidateId}`);
+  }
+
+  setCachedEmailIntro(customerId: string, candidateId: string, data: EmailIntro): void {
+    this.setCachedValue(`email_intro:${customerId}:${candidateId}`, data);
+  }
+
+  clearAiCaches(): void {
+    this.aiCache.clear();
   }
 
   // ---- Stats ----
@@ -154,7 +192,7 @@ class DataStore {
       totalUsers: this.users.size,
       totalNotes: this.notes.length,
       totalSentMatches: Array.from(this.sentMatches.values()).reduce((sum, arr) => sum + arr.length, 0),
-      cacheSize: this.aiScoreCache.size,
+      cacheSize: this.aiCache.size,
     };
   }
 }
