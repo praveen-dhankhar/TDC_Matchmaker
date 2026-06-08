@@ -2,6 +2,7 @@ import type {
   ApiErrorBody,
   CustomerStatus,
   CustomerSummary,
+  EmailIntroResponse,
   MatchResult,
   Note,
   Profile,
@@ -80,6 +81,13 @@ export const api = {
       method: 'POST',
       body: { candidateId },
     });
+  },
+
+  emailIntro(customerId: string, candidateId: string) {
+    return apiFetch<EmailIntroResponse>(
+      `/customers/${customerId}/matches/${candidateId}/email-intro`,
+      { method: 'POST' }
+    );
   },
 
   notes(customerId: string) {
