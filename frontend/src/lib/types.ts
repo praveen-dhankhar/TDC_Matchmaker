@@ -1,6 +1,7 @@
 import type {
   CustomerStatus,
   CustomerSummary,
+  EmailIntroResponse,
   MatchResult,
   Note,
   Profile,
@@ -11,6 +12,7 @@ export type {
   CustomerStatus,
   CustomerSummary,
   MatchResult,
+  EmailIntroResponse,
   Note,
   Profile,
   User,
