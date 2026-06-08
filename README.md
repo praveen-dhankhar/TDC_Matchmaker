@@ -37,7 +37,7 @@ Password: TDC2024!
 | Security middleware | Helmet, CORS allowlist, rate limiting |
 | PII encryption | AES-256-GCM for seeded email and phone fields |
 | AI provider | Gemini REST API |
-| Default AI model | `gemini-flash-latest` |
+| Default AI model | `gemini-3-flash-live` |
 | Data store | In-memory MVP store seeded with 120 matrimonial profiles |
 | Tests | Vitest |
 | Linting | ESLint flat config |
@@ -542,7 +542,7 @@ NODE_ENV=development
 JWT_SECRET=replace-with-local-secret
 JWT_EXPIRES_IN=8h
 GEMINI_API_KEY=your-gemini-api-key
-GEMINI_MODEL=gemini-flash-latest
+GEMINI_MODEL=gemini-3-flash-live
 CORS_ORIGIN=http://localhost:3000
 ENCRYPTION_KEY=replace-with-32-byte-or-longer-secret
 ```
@@ -662,7 +662,7 @@ NODE_ENV=production
 JWT_SECRET=replace-with-strong-secret
 JWT_EXPIRES_IN=8h
 GEMINI_API_KEY=your-gemini-api-key
-GEMINI_MODEL=gemini-flash-latest
+GEMINI_MODEL=gemini-3-flash-live
 ENCRYPTION_KEY=replace-with-strong-secret
 CORS_ORIGIN=https://your-vercel-domain.vercel.app
 ```
