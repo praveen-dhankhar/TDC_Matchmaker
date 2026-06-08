@@ -19,6 +19,10 @@ interface ScoredCandidate {
   breakdown: Record<string, number>;
 }
 
+export function calculateFinalScore(ruleScore: number, aiScore: number): number {
+  return Math.round(0.4 * clamp(ruleScore, 0, 100) + 0.6 * clamp(aiScore, 0, 100));
+}
+
 /**
  * Run the full matching pipeline for a customer.
  * Returns candidates sorted by rule score (descending).
@@ -286,4 +290,4 @@ function scoreFemaleCustomer(
   return { score: clamp(score, 0, 100), breakdown };
 }
 
-export const matchingService = { findMatches };
+export const matchingService = { findMatches, calculateFinalScore };
