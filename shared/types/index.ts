@@ -25,6 +25,23 @@ export type MatchLabel =
   | 'Worth Exploring'
   | 'Low Compatibility';
 
+export interface AiMatchInsight {
+  aiScore: number; // 0-100
+  label: MatchLabel;
+  explanation: string;
+  strengths: string[];
+  concerns: string[];
+  reasoning: string;
+  suggestedNextStep: string;
+  aiUnavailable?: boolean;
+}
+
+export interface EmailIntro {
+  subject: string;
+  intro: string;
+  aiUnavailable?: boolean;
+}
+
 // ---- Core Entities ----
 
 export interface Profile {
@@ -76,14 +93,11 @@ export interface Profile {
   status: CustomerStatus;
 }
 
-export interface MatchResult {
+export interface MatchResult extends AiMatchInsight {
   candidateId: string;
   candidate: Profile;
   ruleScore: number; // 0–100
-  aiScore: number; // 0–100
   finalScore: number; // weighted combination
-  label: MatchLabel;
-  explanation: string; // AI-generated
   sentAt?: string; // ISO 8601, null if not sent
 }
 
@@ -154,6 +168,10 @@ export interface SendMatchRequest {
 export interface SendMatchResponse {
   message: string;
   matchId: string;
+}
+
+export interface EmailIntroResponse extends EmailIntro {
+  cached: boolean;
 }
 
 export interface CreateNoteRequest {
