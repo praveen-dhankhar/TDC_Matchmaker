@@ -4,6 +4,7 @@ import { notesService } from '../services/notes.service';
 import { matchingService } from '../services/matching.service';
 import { aiService } from '../services/ai.service';
 import { emailService } from '../services/email.service';
+import { emailIntroAiService } from '../services/emailIntroAi.service';
 import { dataStore } from '../data/store';
 import { validateBody } from '../middleware/error';
 import { createNoteSchema, updateStatusSchema, sendMatchSchema } from '../middleware/validation';
@@ -108,7 +109,7 @@ router.get('/:id/matches', async (req: AuthenticatedRequest, res: Response) => {
         );
 
         // Compute final weighted score
-        const finalScore = Math.round(0.4 * ruleScore + 0.6 * aiResult.aiScore);
+        const finalScore = matchingService.calculateFinalScore(ruleScore, aiResult.aiScore);
 
         // Check if already sent
         const alreadySent = dataStore.isMatchAlreadySent(req.params.id, candidate.id);
@@ -128,6 +129,11 @@ router.get('/:id/matches', async (req: AuthenticatedRequest, res: Response) => {
           finalScore,
           label: aiResult.label,
           explanation: aiResult.explanation,
+          strengths: aiResult.strengths,
+          concerns: aiResult.concerns,
+          reasoning: aiResult.reasoning,
+          suggestedNextStep: aiResult.suggestedNextStep,
+          aiUnavailable: aiResult.aiUnavailable,
           sentAt: alreadySent ? dataStore.getSentMatches(req.params.id).find((m) => m.candidateId === candidate.id)?.sentAt : undefined,
         };
       })
@@ -145,6 +151,62 @@ router.get('/:id/matches', async (req: AuthenticatedRequest, res: Response) => {
       statusCode: 500,
     });
   }
+});
+
+/**
+ * POST /api/customers/:id/matches/:candidateId/email-intro
+ * Generate a personalized short email introduction for a match.
+ */
+router.post('/:id/matches/:candidateId/email-intro', async (req: AuthenticatedRequest, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ error: 'Unauthorized', message: 'Not authenticated', statusCode: 401 });
+    return;
+  }
+
+  if (!dataStore.isCustomerOwnedByMatchmaker(req.params.id, req.user.userId)) {
+    res.status(404).json({
+      error: 'Not Found',
+      message: 'Customer not found or not assigned to you',
+      statusCode: 404,
+    });
+    return;
+  }
+
+  const customer = dataStore.getCustomerById(req.params.id);
+  const candidate = dataStore.getCustomerById(req.params.candidateId);
+  if (!customer || !candidate) {
+    res.status(404).json({
+      error: 'Not Found',
+      message: 'Customer or candidate not found',
+      statusCode: 404,
+    });
+    return;
+  }
+
+  const cachedIntro = dataStore.getCachedEmailIntro(req.params.id, req.params.candidateId);
+  if (cachedIntro) {
+    res.json({ ...cachedIntro, cached: true });
+    return;
+  }
+
+  const scoredMatch = matchingService
+    .findMatches(req.params.id, 120)
+    .find(({ candidate: scoredCandidate }) => scoredCandidate.id === req.params.candidateId);
+  const ruleScore = scoredMatch?.ruleScore ?? 50;
+  const aiResult = await aiService.scoreWithAI(req.params.id, req.params.candidateId, ruleScore);
+
+  const intro = await emailIntroAiService.getEmailIntroForMatch(
+    req.params.id,
+    req.params.candidateId,
+    {
+      customerProfile: customer,
+      candidateProfile: candidate,
+      matchExplanation: aiResult.explanation,
+      strengths: aiResult.strengths,
+    }
+  );
+
+  res.json(intro);
 });
 
 /**
@@ -196,7 +258,7 @@ router.post('/:id/send-match', validateBody(sendMatchSchema), async (req: Authen
 
   // Get AI score (usually cached from the matches view)
   const aiResult = await aiService.scoreWithAI(req.params.id, candidateId, ruleScore);
-  const finalScore = Math.round(0.4 * ruleScore + 0.6 * aiResult.aiScore);
+  const finalScore = matchingService.calculateFinalScore(ruleScore, aiResult.aiScore);
 
   // Record the sent match
   const matchResult: MatchResult = {
@@ -207,6 +269,11 @@ router.post('/:id/send-match', validateBody(sendMatchSchema), async (req: Authen
     finalScore,
     label: aiResult.label,
     explanation: aiResult.explanation,
+    strengths: aiResult.strengths,
+    concerns: aiResult.concerns,
+    reasoning: aiResult.reasoning,
+    suggestedNextStep: aiResult.suggestedNextStep,
+    aiUnavailable: aiResult.aiUnavailable,
     sentAt: new Date().toISOString(),
   };
   dataStore.recordSentMatch(req.params.id, matchResult);
